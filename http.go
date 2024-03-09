@@ -77,6 +77,10 @@ type Request struct {
 	// By default redirect path values are normalized, i.e.
 	// extra slashes are removed, special characters are encoded.
 	DisableRedirectPathNormalizing bool
+
+	ShouldClose func() bool
+	KeepConn    bool
+	Conn        *clientConn
 }
 
 // Response represents HTTP response.

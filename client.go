@@ -2892,9 +2892,14 @@ func (t *transport) RoundTrip(hc *HostClient, req *Request, resp *Response) (ret
 		deadline = time.Now().Add(req.timeout)
 	}
 
-	cc, err := hc.acquireConn(req.timeout, req.ConnectionClose())
-	if err != nil {
-		return false, err
+	var cc *clientConn
+	if req.KeepConn && req.Conn != nil {
+		cc = req.Conn
+	} else {
+		cc, err = hc.acquireConn(req.timeout, req.ConnectionClose())
+		if err != nil {
+			return false, err
+		}
 	}
 	conn := cc.c
 
@@ -2910,6 +2915,7 @@ func (t *transport) RoundTrip(hc *HostClient, req *Request, resp *Response) (ret
 
 	if err = conn.SetWriteDeadline(writeDeadline); err != nil {
 		hc.closeConn(cc)
+		req.Conn = nil
 		return true, err
 	}
 
@@ -2939,6 +2945,7 @@ func (t *transport) RoundTrip(hc *HostClient, req *Request, resp *Response) (ret
 	isConnRST := isConnectionReset(err)
 	if err != nil && !isConnRST {
 		hc.closeConn(cc)
+		req.Conn = nil
 		return true, err
 	}
 
@@ -2952,6 +2959,7 @@ func (t *transport) RoundTrip(hc *HostClient, req *Request, resp *Response) (ret
 
 	if err = conn.SetReadDeadline(readDeadline); err != nil {
 		hc.closeConn(cc)
+		req.Conn = nil
 		return true, err
 	}
 
@@ -2967,12 +2975,13 @@ func (t *transport) RoundTrip(hc *HostClient, req *Request, resp *Response) (ret
 	if err != nil {
 		hc.releaseReader(br)
 		hc.closeConn(cc)
+		req.Conn = nil
 		// Don't retry in case of ErrBodyTooLarge since we will just get the same again.
 		needRetry := err != ErrBodyTooLarge
 		return needRetry, err
 	}
 
-	closeConn := resetConnection || req.ConnectionClose() || resp.ConnectionClose() || isConnRST
+	closeConn := resetConnection || req.ConnectionClose() || resp.ConnectionClose() || isConnRST || (req.ShouldClose != nil && req.ShouldClose())
 	if customStreamBody && resp.bodyStream != nil {
 		rbs := resp.bodyStream
 		resp.bodyStream = newCloseReader(rbs, func() error {
@@ -2982,8 +2991,10 @@ func (t *transport) RoundTrip(hc *HostClient, req *Request, resp *Response) (ret
 			}
 			if closeConn || resp.ConnectionClose() {
 				hc.closeConn(cc)
+				req.Conn = nil
 			} else {
 				hc.releaseConn(cc)
+				req.Conn = nil
 			}
 			return nil
 		})
@@ -2992,10 +3003,16 @@ func (t *transport) RoundTrip(hc *HostClient, req *Request, resp *Response) (ret
 		hc.releaseReader(br)
 	}
 
+	if req.KeepConn {
+		req.Conn = cc
+	}
+
 	if closeConn {
 		hc.closeConn(cc)
-	} else {
+		req.Conn = nil
+	} else if !req.KeepConn {
 		hc.releaseConn(cc)
+		req.Conn = nil
 	}
 	return false, nil
 }
